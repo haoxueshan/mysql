@@ -829,3 +829,37 @@ commit;
 `SET [ SESSION | GLOBAL ] TRANSACTION ISOLATION LEVEL {READ UNCOMMITTED | READ COMMITTED | REPEATABLE READ | SERIALIZABLE };`
 SESSION 是会话级别，表示只针对当前会话有效，GLOBAL 表示对所有会话有效
 
+# 进阶篇
+
+## 存储引擎
+
+MySQL体系结构：
+
+![结构图](https://dhc.pythonanywhere.com/media/editor/MySQL体系结构_20220315034329549927.png "结构图")
+![层级描述](https://dhc.pythonanywhere.com/media/editor/MySQL体系结构层级含义_20220315034359342837.png "层级描述")
+
+存储引擎就是存储数据、建立索引、更新/查询数据等技术的实现方式。存储引擎是基于表而不是基于库的，所以存储引擎也可以被称为表引擎。
+默认存储引擎是InnoDB。
+
+相关操作：
+
+```mysql
+-- 查询建表语句
+show create table account;
+-- 建表时指定存储引擎
+CREATE TABLE 表名(
+	...
+) ENGINE=INNODB;
+-- 查看当前数据库支持的存储引擎
+show engines;
+```
+
+### InnoDB
+
+InnoDB 是一种兼顾高可靠性和高性能的通用存储引擎，在 MySQL 5.5 之后，InnoDB 是默认的 MySQL 引擎。
+
+特点：
+
+- DML 操作遵循 ACID 模型，支持**事务**
+- **行级锁**，提高并发访问性能
+- 支持**外键**约束，保证数据的完整性和正确性
