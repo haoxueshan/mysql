@@ -578,9 +578,9 @@ alter table emp add constraint fk_emp_dept_id foreign key(dept_id) references de
 ```mysql
 -- 查询员工姓名，及关联的部门的名称
 -- 隐式
-select e.name, d.name from employee as e, dept as d where e.dept = d.id;
+select e.name, d.name from emp as e, dept as d where e.dept_id = d.id;
 -- 显式
-select e.name, d.name from employee as e inner join dept as d on e.dept = d.id;
+select e.name, d.name from emp e inner join dept d on e.dept_id=d.id;
 ```
 
 ### 外连接查询
@@ -619,9 +619,9 @@ select d.name, e.* from employee as e right outer join dept as d on e.dept = d.i
 
 ```mysql
 -- 查询员工及其所属领导的名字
-select a.name, b.name from employee a, employee b where a.manager = b.id;
+select a.name'员工', b.name'领导' from emp a, emp b where a.managerid = b.id;
 -- 没有领导的也查询出来
-select a.name, b.name from employee a left join employee b on a.manager = b.id;
+select a.name'员工', b.name'领导' from emp a left join emp b on a.managerid=b.id;
 ```
 
 ### 联合查询 union, union all
@@ -635,11 +635,23 @@ SELECT 字段列表 FROM 表A ...
 UNION [ALL]
 SELECT 字段列表 FROM 表B ...
 ```
+案例：
+```mysql
+--查询表中小于salary10000和表中age大于50的字段
+select * from emp where salary<10000
+union all
+select * from emp where age>50
+--去掉重复显示的字段
+select * from emp where salary<10000
+union
+select * from emp where age>50
+```
 
 #### 注意事项
 
 - UNION ALL 会有重复结果，UNION 不会
 - 联合查询比使用or效率高，不会使索引失效
+- 对于联合查询的多张表的列数必须保持一致，字段类型也需要保持一致
 
 ### 子查询
 
@@ -697,11 +709,11 @@ select * from employee where entrydate > (select entrydate from employee where n
 
 ```mysql
 -- 查询销售部和市场部的所有员工信息
-select * from employee where dept in (select id from dept where name = '销售部' or name = '市场部');
+select * from emp where dept in (select id from dept where name = '销售部' or name = '市场部');
 -- 查询比财务部所有人工资都高的员工信息
-select * from employee where salary > all(select salary from employee where dept = (select id from dept where name = '财务部'));
+select * from emp where salary > all(select salary from emp where dept_id = (select id from dept where name = '财务部'));
 -- 查询比研发部任意一人工资高的员工信息
-select * from employee where salary > any (select salary from employee where dept = (select id from dept where name = '研发部'));
+select * from emp where salary > any (select salary from emp where dept_id = (select id from dept where name = '研发部'));
 ```
 
 #### 行子查询
@@ -713,8 +725,8 @@ select * from employee where salary > any (select salary from employee where dep
 
 ```mysql
 -- 查询与xxx的薪资及直属领导相同的员工信息
-select * from employee where (salary, manager) = (12500, 1);
-select * from employee where (salary, manager) = (select salary, manager from employee where name = 'xxx');
+select * from emp where (salary, managerid) = (12500, 1);
+select * from emp where (salary, managerid) = (select salary, managerid from emp where name = 'xxx');
 ```
 
 #### 表子查询
@@ -726,7 +738,94 @@ select * from employee where (salary, manager) = (select salary, manager from em
 
 ```mysql
 -- 查询与xxx1，xxx2的职位和薪资相同的员工
-select * from employee where (job, salary) in (select job, salary from employee where name = 'xxx1' or name = 'xxx2');
+select * from emp where (job, salary) in (select job, salary from emp where name = 'xxx1' or name = 'xxx2');
 -- 查询入职日期是2006-01-01之后的员工，及其部门信息
-select e.*, d.* from (select * from employee where entrydate > '2006-01-01') as e left join dept as d on e.dept = d.id;
+select e.*, d.* from (select * from emp where entrydate > '2006-01-01') as e left join dept as d on e.dept_id = d.id;
 ```
+
+## 事务
+
+事务是一组操作的集合，事务会把所有操作作为一个整体一起向系统提交或撤销操作请求，即这些操作要么同时成功，要么同时失败。
+
+基本操作：
+
+```mysql
+-- 1. 查询张三账户余额
+select * from account where name = '张三';
+-- 2. 将张三账户余额-1000
+update account set money = money - 1000 where name = '张三';
+-- 此语句出错后张三钱减少但是李四钱没有增加
+模拟sql语句错误
+-- 3. 将李四账户余额+1000
+update account set money = money + 1000 where name = '李四';
+
+-- 查看事务提交方式
+SELECT @@AUTOCOMMIT;
+-- 设置事务提交方式，1为自动提交，0为手动提交，该设置只对当前会话有效
+SET @@AUTOCOMMIT = 0;
+-- 提交事务
+COMMIT;
+-- 回滚事务
+ROLLBACK;
+
+-- 设置手动提交后上面代码改为：
+select * from account where name = '张三';
+update account set money = money - 1000 where name = '张三';
+update account set money = money + 1000 where name = '李四';
+commit;
+```
+
+操作方式二：
+
+开启事务：
+`START TRANSACTION 或 BEGIN TRANSACTION;`
+提交事务：
+`COMMIT;`
+回滚事务：
+`ROLLBACK;`
+
+操作实例：
+
+```mysql
+start transaction;
+select * from account where name = '张三';
+update account set money = money - 1000 where name = '张三';
+update account set money = money + 1000 where name = '李四';
+commit;
+```
+
+### 四大特性ACID
+
+- 原子性(Atomicity)：事务是不可分割的最小操作但愿，要么全部成功，要么全部失败
+- 一致性(Consistency)：事务完成时，必须使所有数据都保持一致状态
+- 隔离性(Isolation)：数据库系统提供的隔离机制，保证事务在不受外部并发操作影响的独立环境下运行
+- 持久性(Durability)：事务一旦提交或回滚，它对数据库中的数据的改变就是永久的
+
+### 并发事务
+
+| 问题  | 描述  |
+| ------------ | ------------ |
+| 脏读  | 一个事务读到另一个事务还没提交的数据  |
+| 不可重复读  | 一个事务先后读取同一条记录，但两次读取的数据不同  |
+| 幻读  | 一个事务按照条件查询数据时，没有对应的数据行，但是再插入数据时，又发现这行数据已经存在  |
+
+> 这三个问题的详细演示：https://www.bilibili.com/video/BV1Kr4y1i7ru?p=55cd 
+
+并发事务隔离级别：
+
+| 隔离级别  | 脏读  | 不可重复读  | 幻读  |
+| ------------ | ------------ | ------------ | ------------ |
+| Read uncommitted  | √  | √  | √  |
+| Read committed  | ×  | √  | √  |
+| Repeatable Read(默认)  | ×  | ×  | √  |
+| Serializable  | ×  | ×  | ×  |
+
+- √表示在当前隔离级别下该问题会出现
+- Serializable 性能最低；Read uncommitted 性能最高，数据安全性最差
+
+查看事务隔离级别：
+`SELECT @@TRANSACTION_ISOLATION;`
+设置事务隔离级别：
+`SET [ SESSION | GLOBAL ] TRANSACTION ISOLATION LEVEL {READ UNCOMMITTED | READ COMMITTED | REPEATABLE READ | SERIALIZABLE };`
+SESSION 是会话级别，表示只针对当前会话有效，GLOBAL 表示对所有会话有效
+
