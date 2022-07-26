@@ -1189,3 +1189,37 @@ EXPLAIN 各字段含义：
 `explain select * from tb_user force index(idx_user_pro) where profession="软件工程";`
 
 use 是建议，实际使用哪个索引 MySQL 还会自己权衡运行速度去更改，force就是无论如何都强制使用该索引。
+
+#### 覆盖索引&回表查询
+
+尽量使用覆盖索引（查询使用了索引，并且需要返回的列，在该索引中已经全部能找到），减少 select *。
+
+explain 中 extra 字段含义：
+`using index condition`：查找使用了索引，但是需要回表查询数据
+`using where; using index;`：查找使用了索引，但是需要的数据都在索引列中能找到，所以不需要回表查询
+
+如果在聚集索引中直接能找到对应的行，则直接返回行数据，只需要一次查询，哪怕是select \*；如果在辅助索引中找聚集索引，如`select id, name from xxx where name='xxx';`，也只需要通过辅助索引(name)查找到对应的id，返回name和name索引对应的id即可，只需要一次查询；如果是通过辅助索引查找其他字段，则需要回表查询，如`select id, name, gender from xxx where name='xxx';`
+
+所以尽量不要用`select *`，容易出现回表查询，降低效率，除非有联合索引包含了所有字段
+
+面试题：一张表，有四个字段（id, username, password, status），由于数据量大，需要对以下SQL语句进行优化，该如何进行才是最优方案：
+`select id, username, password from tb_user where username='itcast';`
+
+解：给username和password字段建立联合索引，则不需要回表查询，直接覆盖索引
+
+#### 前缀索引
+
+当字段类型为字符串（varchar, text等）时，有时候需要索引很长的字符串，这会让索引变得很大，查询时，浪费大量的磁盘IO，影响查询效率，此时可以只降字符串的一部分前缀，建立索引，这样可以大大节约索引空间，从而提高索引效率。
+
+语法：`create index idx_xxxx on table_name(columnn(n));`
+前缀长度：可以根据索引的选择性来决定，而选择性是指不重复的索引值（基数）和数据表的记录总数的比值，索引选择性越高则查询效率越高，唯一索引的选择性是1，这是最好的索引选择性，性能也是最好的。
+求选择性公式：
+```mysql
+select count(distinct email) / count(*) from tb_user;
+select count(distinct substring(email, 1, 5)) / count(*) from tb_user;
+```
+
+show index 里面的sub_part可以看到接取的长度
+
+
+
