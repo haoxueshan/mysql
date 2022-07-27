@@ -1221,5 +1221,196 @@ select count(distinct substring(email, 1, 5)) / count(*) from tb_user;
 
 show index 里面的sub_part可以看到接取的长度
 
+#### 单列索引&联合索引
+
+单列索引：即一个索引只包含单个列
+联合索引：即一个索引包含了多个列
+在业务场景中，如果存在多个查询条件，考虑针对于查询字段建立索引时，建议建立联合索引，而非单列索引。
+
+单列索引情况：
+`explain select id, phone, name from tb_user where phone = '17799990010' and name = '韩信';`
+这句只会用到phone索引字段
+
+##### 注意事项
+
+- 多条件联合查询时，MySQL优化器会评估哪个字段的索引效率更高，会选择该索引完成本次查询
+
+### 设计原则
+
+1. 针对于数据量较大，且查询比较频繁的表建立索引
+2. 针对于常作为查询条件（where）、排序（order by）、分组（group by）操作的字段建立索引
+3. 尽量选择区分度高的列作为索引，尽量建立唯一索引，区分度越高，使用索引的效率越高
+4. 如果是字符串类型的字段，字段长度较长，可以针对于字段的特点，建立前缀索引
+5. 尽量使用联合索引，减少单列索引，查询时，联合索引很多时候可以覆盖索引，节省存储空间，避免回表，提高查询效率
+6. 要控制索引的数量，索引并不是多多益善，索引越多，维护索引结构的代价就越大，会影响增删改的效率
+7. 如果索引列不能存储NULL值，请在创建表时使用NOT NULL约束它。当优化器知道每列是否包含NULL值时，它可以更好地确定哪个索引最有效地用于查询
+
+## SQL 优化
+
+### 插入数据
+
+普通插入：
+
+1. 采用批量插入（一次插入的数据不建议超过1000条）
+2. 手动提交事务
+3. 主键顺序插入
+
+大批量插入：
+如果一次性需要插入大批量数据，使用insert语句插入性能较低，此时可以使用MySQL数据库提供的load指令插入。
+
+```mysql
+# 客户端连接服务端时，加上参数 --local-infile（这一行在bash/cmd界面输入）
+mysql --local-infile -u root -p
+# 设置全局参数local_infile为1，开启从本地加载文件导入数据的开关
+set global local_infile = 1;
+select @@local_infile;
+# 执行load指令将准备好的数据，加载到表结构中
+load data local infile '/root/sql1.log' into table 'tb_user' fields terminated by ',' lines terminated by '\n';
+```
+
+### 主键优化
+
+数据组织方式：在InnoDB存储引擎中，表数据都是根据主键顺序组织存放的，这种存储方式的表称为**索引组织表**（Index organized table, IOT）
+
+页分裂：页可以为空，也可以填充一般，也可以填充100%，每个页包含了2-N行数据（如果一行数据过大，会行溢出），根据主键排列。
+
+页合并：当删除一行记录时，实际上记录并没有被物理删除，只是记录被标记（flaged）为删除并且它的空间变得允许被其他记录声明使用。当页中删除的记录到达 MERGE_THRESHOLD（默认为页的50%），InnoDB会开始寻找最靠近的页（前后）看看是否可以将这两个页合并以优化空间使用。
+
+MERGE_THRESHOLD：合并页的阈值，可以自己设置，在创建表或创建索引时指定
+
+> 文字说明不够清晰明了，具体可以看视频里的PPT演示过程：https://www.bilibili.com/video/BV1Kr4y1i7ru?p=90
+
+主键设计原则：
+
+- 满足业务需求的情况下，尽量降低主键的长度
+- 插入数据时，尽量选择顺序插入，选择使用 AUTO_INCREMENT 自增主键
+- 尽量不要使用 UUID 做主键或者是其他的自然主键，如身份证号
+- 业务操作时，避免对主键的修改
+
+### order by优化
+
+1. Using filesort：通过表的索引或全表扫描，读取满足条件的数据行，然后在排序缓冲区 sort buffer 中完成排序操作，所有不是通过索引直接返回排序结果的排序都叫 FileSort 排序
+2. Using index：通过有序索引顺序扫描直接返回有序数据，这种情况即为 using index，不需要额外排序，操作效率高
+
+如果order by字段全部使用升序排序或者降序排序，则都会走索引，但是如果一个字段升序排序，另一个字段降序排序，则不会走索引，explain的extra信息显示的是`Using index, Using filesort`，如果要优化掉Using filesort，则需要另外再创建一个索引，如：`create index idx_user_age_phone_ad on tb_user(age asc, phone desc);`，此时使用`select id, age, phone from tb_user order by age asc, phone desc;`会全部走索引
+
+总结：
+
+- 根据排序字段建立合适的索引，多字段排序时，也遵循最左前缀法则
+- 尽量使用覆盖索引
+- 多字段排序，一个升序一个降序，此时需要注意联合索引在创建时的规则（ASC/DESC）
+- 如果不可避免出现filesort，大数据量排序时，可以适当增大排序缓冲区大小 sort_buffer_size（默认256k）
+
+### group by优化
+
+- 在分组操作时，可以通过索引来提高效率
+- 分组操作时，索引的使用也是满足最左前缀法则的
+
+如索引为`idx_user_pro_age_stat`，则句式可以是`select ... where profession order by age`，这样也符合最左前缀法则
+
+### limit优化
+
+常见的问题如`limit 2000000, 10`，此时需要 MySQL 排序前2000000条记录，但仅仅返回2000000 - 2000010的记录，其他记录丢弃，查询排序的代价非常大。
+优化方案：一般分页查询时，通过创建覆盖索引能够比较好地提高性能，可以通过覆盖索引加子查询形式进行优化
+
+例如：
+
+```mysql
+-- 此语句耗时很长
+select * from tb_sku limit 9000000, 10;
+-- 通过覆盖索引加快速度，直接通过主键索引进行排序及查询
+select id from tb_sku order by id limit 9000000, 10;
+-- 下面的语句是错误的，因为 MySQL 不支持 in 里面使用 limit
+-- select * from tb_sku where id in (select id from tb_sku order by id limit 9000000, 10);
+-- 通过连表查询即可实现第一句的效果，并且能达到第二句的速度
+select * from tb_sku as s, (select id from tb_sku order by id limit 9000000, 10) as a where s.id = a.id;
+```
+
+### count优化
+
+MyISAM 引擎把一个表的总行数存在了磁盘上，因此执行 count(\*) 的时候会直接返回这个数，效率很高（前提是不适用where）；
+InnoDB 在执行 count(\*) 时，需要把数据一行一行地从引擎里面读出来，然后累计计数。
+优化方案：自己计数，如创建key-value表存储在内存或硬盘，或者是用redis
+
+count的几种用法：
+
+- 如果count函数的参数（count里面写的那个字段）不是NULL（字段值不为NULL），累计值就加一，最后返回累计值
+- 用法：count(\*)、count(主键)、count(字段)、count(1)
+- count(主键)跟count(\*)一样，因为主键不能为空；count(字段)只计算字段值不为NULL的行；count(1)引擎会为每行添加一个1，然后就count这个1，返回结果也跟count(\*)一样；count(null)返回0
+
+各种用法的性能：
+
+- count(主键)：InnoDB引擎会遍历整张表，把每行的主键id值都取出来，返回给服务层，服务层拿到主键后，直接按行进行累加（主键不可能为空）
+- count(字段)：没有not null约束的话，InnoDB引擎会遍历整张表把每一行的字段值都取出来，返回给服务层，服务层判断是否为null，不为null，计数累加；有not null约束的话，InnoDB引擎会遍历整张表把每一行的字段值都取出来，返回给服务层，直接按行进行累加
+- count(1)：InnoDB 引擎遍历整张表，但不取值。服务层对于返回的每一层，放一个数字 1 进去，直接按行进行累加
+- count(\*)：InnoDB 引擎并不会把全部字段取出来，而是专门做了优化，不取值，服务层直接按行进行累加
+
+按效率排序：count(字段) < count(主键) < count(1) < count(\*)，所以尽量使用 count(\*)
+
+### update优化（避免行锁升级为表锁）
+
+InnoDB 的行锁是针对索引加的锁，不是针对记录加的锁，并且该索引不能失效，否则会从行锁升级为表锁。
+
+如以下两条语句：
+`update student set no = '123' where id = 1;`，这句由于id有主键索引，所以只会锁这一行；
+`update student set no = '123' where name = 'test';`，这句由于name没有索引，所以会把整张表都锁住进行数据更新，解决方法是给name字段添加索引
+
+## 视图/存储过程/触发器
+
+### 视图
+
+视图(View)是一种虚拟存在的表。视图中的数据并不在数据库中实际存在，行和列数据来自定义视图的查询中使用的表，并且是在使用视图时动态生成的。
+通俗的讲，视图只保存了查询的SQL逻辑，不保存查询结果。所以我们在创建视图的时候，主要的工作就落在创建这条SQL查询语句上。
+
+#### 语法
+
+- 视图基本语法
+```mysql
+1. 创建:
+CREATE [OR REPLACE] VIEW 视图名称[(列名列表)] AS SELECT语句 [WITH[CASCADED|LOCAL]CHECK OPTION]
+
+2. 查询:
+查看创建视图语句：SHOW CREATE VIEW 视图名称;
+查看视图数据：SELECT * FROM 视图名称 ...... ;
+
+3. 修改:
+方式一：CREATE [OR REPLACE] VIEW 视图名称[(列名列表)] AS SELECT语句 [ WITH
+[ CASCADED | LOCAL ] CHECK OPTION ]
+方式二：ALTER VIEW 视图名称[(列名列表)] AS SELECT语句 [ WITH [ CASCADED |
+LOCAL ] CHECK OPTION ]
+
+4. 删除:
+DROP VIEW [IF EXISTS] 视图名称 [,视图名称] ...
+```
+
+- 视图案例演示
+```mysql
+-- 创建视图
+create or replace view stu_v_1 as select id,name from student where id <= 10;
+-- 查询视图
+show create view stu_v_1;
+select * from stu_v_1;
+select * from stu_v_1 where id < 3;
+-- 修改视图
+create or replace view stu_v_1 as select id,name,no from student where id <= 10;
+alter view stu_v_1 as select id,name from student where id <= 10;
+-- 删除视图
+drop view if exists stu_v_1;
+```
+上述我们演示了，视图应该如何创建、查询、修改、删除，那么我们能不能通过视图来插入、更新数据
+呢？ 接下来，做一个测试。
 
 
+#### 检查选项
+当使用WITH CHECK OPTION子句创建视图时，MySQL会通过视图检查正在更改的每个行，例如 插
+入，更新，删除，以使其符合视图的定义。 MySQL允许基于另一个视图创建视图，它还会检查依赖视
+图中的规则以保持一致性。为了确定检查的范围，mysql提供了两个选项： CASCADED 和 LOCAL
+，默认值为 CASCADED 。
+
+
+
+### 存储过程
+
+### 存储函数
+
+### 触发器
