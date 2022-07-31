@@ -1484,7 +1484,7 @@ select * from tb_stu_course_view;
 存储过程是事先经过编译并存储在数据库中的一段 SQL 语句的集合，调用存储过程可以简化应用开发
 人员的很多工作，减少数据在数据库和应用服务器之间的传输，对于提高数据处理的效率是有好处的。
 存储过程思想上很简单，就是数据库 SQL 语言层面的代码封装与重用。
-![演示图](https://github.com/haoxueshan/mysql/blob/main/%E5%AD%98%E5%82%A8%E8%BF%87%E7%A8%8B.png "演示图")
+![演示图](./picture/%E5%AD%98%E5%82%A8%E8%BF%87%E7%A8%8B.png "演示图")
 
 ### 存储函数
 
