@@ -2368,7 +2368,9 @@ DDL冲突，**保证读写的正确性。**
 |lock tables xxx read /write|SHARED_READ_ONLY /<br>SHARED_NO_READ_WRITE|
 |select 、select ...<br>lock in share mode|SHARED_READ|与SHARED_READ、<br>SHARED_WRITE兼容，与<br>EXCLUSIVE互斥|
 |insert 、update、<br>delete、select ... for<br>update|SHARED_WRITE|与SHARED_READ、<br>SHARED_WRITE兼容，与<br>EXCLUSIVE互斥|
-|alter table ... |EXCLUSIVE|与其他的MDL都互斥|
+|alter table ... |EXCLUSIVE|与其他的MDL都互斥
+
+
 演示：
 当执行SELECT、INSERT、UPDATE、DELETE等语句时，添加的是元数据共享锁（SHARED_READ /
 SHARED_WRITE），之间是兼容的
