@@ -2602,3 +2602,170 @@ innodb_flush_log_at_trx_commit：日志刷新到磁盘时机，取值主要包�
 
 #### 磁盘结构
 接下来，再来看看InnoDB体系结构的右边部分，也就是磁盘结构：
+
+![演示图](./picture/%E7%A3%81%E7%9B%98%E7%BB%93%E6%9E%84.png  "磁盘结构")
+
+1. System Tablespace
+系统表空间是更改缓冲区的存储区域。如果表是在系统表空间而不是每个表文件或通用表空间中创建
+的，它也可能包含表和索引数据。(在MySQL5.x版本中还包含InnoDB数据字典、undolog等)
+参数：innodb_data_file_path
+
+系统表空间，默认的文件名叫 ibdata1。
+2. File-Per-Table Tablespaces
+如果开启了innodb_file_per_table开关 ，则每个表的文件表空间包含单个InnoDB表的数据和索
+引 ，并存储在文件系统上的单个数据文件中。
+开关参数：innodb_file_per_table ，该参数默认开启
+那也就是说，我们没创建一个表，都会产生一个表空间文件
+3. General Tablespaces
+通用表空间，需要通过 CREATE TABLESPACE 语法创建通用表空间，在创建表时，可以指定该表空
+间。
+A. 创建表空间
+```mysql
+ CREATE TABLESPACE ts_name ADD DATAFILE 'file_name' ENGINE = engine_name;
+```
+B. 创建表时指定表空间
+```mysql
+CREATE TABLE xxx ... TABLESPACE ts_name;
+```
+4. Undo Tablespaces
+撤销表空间，MySQL实例在初始化时会自动创建两个默认的undo表空间（初始大小16M），用于存储
+undo log日志。
+5. Temporary Tablespaces
+InnoDB 使用会话临时表空间和全局临时表空间。存储用户创建的临时表等数据。
+6. Doublewrite Buffer Files
+1 CREATE TABLESPACE ts_name ADD DATAFILE 'file_name' ENGINE = engine_name;
+1 CREATE TABLE xxx ... TABLESPACE ts_name;
+双写缓冲区，innoDB引擎将数据页从Buffer Pool刷新到磁盘前，先将数据页写入双写缓冲区文件
+中，便于系统异常时恢复数据。
+
+7. Redo Log
+重做日志，是用来实现事务的持久性。该日志文件由两部分组成：重做日志缓冲（redo log
+buffer）以及重做日志文件（redo log）,前者是在内存中，后者在磁盘中。当事务提交之后会把所
+有修改信息都会存到该日志中, 用于在刷新脏页到磁盘时,发生错误时, 进行数据恢复使用。
+以循环方式写入重做日志文件，涉及两个文件：
+![演示图](./picture/%E6%97%A5%E5%BF%97%E6%96%87%E4%BB%B6.png  "日志文件")
+
+前面我们介绍了InnoDB的内存结构，以及磁盘结构，那么内存中我们所更新的数据，又是如何到磁盘
+中的呢？ 此时，就涉及到一组后台线程，接下来，就来介绍一些InnoDB中涉及到的后台线程。
+![演示图](./picture/%E5%90%8E%E5%8F%B0%E7%BA%BF%E7%A8%8B.png "后台线程")
+
+#### 后台线程
+![演示图](./picture/%E5%90%8E%E5%8F%B0%E7%BA%BF%E7%A8%8B%E7%BC%93%E5%86%B2.png "后台线程缓冲")
+
+在InnoDB的后台线程中，分为4类，分别是：Master Thread 、IO Thread、Purge Thread、
+Page Cleaner Thread。
+
+1. Master Thread
+核心后台线程，负责调度其他线程，还负责将缓冲池中的数据异步刷新到磁盘中, 保持数据的一致性，
+还包括脏页的刷新、合并插入缓存、undo页的回收 。
+2. IO Thread
+在InnoDB存储引擎中大量使用了AIO来处理IO请求, 这样可以极大地提高数据库的性能，而IO
+Thread主要负责这些IO请求的回调。
+
+|线程类型|默认个数|职责|
+|------| ------| ------|
+|Read thread|4|负责读操作|
+|Write thread|4|负责写操作|
+|Log thread|1|负责将日志缓冲区刷新到磁盘|
+Insert buffer thread|1|负责将写缓冲区内容刷新到磁盘|
+
+我们可以通过以下的这条指令，查看到InnoDB的状态信息，其中就包含IO Thread信息。
+
+```mysql
+show engine innodb status \G;
+```
+3. Purge Thread
+主要用于回收事务已经提交了的undo log，在事务提交之后，undo log可能不用了，就用它来回
+收。
+4. Page Cleaner Thread
+协助 Master Thread 刷新脏页到磁盘的线程，它可以减轻 Master Thread 的工作压力，减少阻
+塞。
+
+### 事务原理
+
+#### 事务基础
+
+1. 事务
+事务 是一组操作的集合，它是一个不可分割的工作单位，事务会把所有的操作作为一个整体一起向系
+统提交或撤销操作请求，即这些操作要么同时成功，要么同时失败。
+2. 特性
+- 原子性（Atomicity）：事务是不可分割的最小操作单元，要么全部成功，要么全部失败。
+- 一致性（Consistency）：事务完成时，必须使所有的数据都保持一致状态。
+- 隔离性（Isolation）：数据库系统提供的隔离机制，保证事务在不受外部并发操作影响的独立环
+境下运行。
+- 持久性（Durability）：事务一旦提交或回滚，它对数据库中的数据的改变就是永久的。
+那实际上，我们研究事务的原理，就是研究MySQL的InnoDB引擎是如何保证事务的这四大特性的。
+
+而对于这四大特性，实际上分为两个部分。 其中的原子性、一致性、持久化，实际上是由InnoDB中的
+两份日志来保证的，一份是redo log日志，一份是undo log日志。 而持久性是通过数据库的锁，
+加上MVCC来保证的。
+
+![演示图](./picture/%E4%BA%8B%E5%8A%A1%E5%8E%9F%E7%90%86.png "事务原理")
+主要就是来研究一下redolog，undolog以及MVCC。
+
+#### redo log
+重做日志，记录的是事务提交时数据页的物理修改，是用来实现事务的持久性。
+该日志文件由两部分组成：重做日志缓冲（redo log buffer）以及重做日志文件（redo log
+file）,前者是在内存中，后者在磁盘中。当事务提交之后会把所有修改信息都存到该日志文件中, 用
+于在刷新脏页到磁盘,发生错误时, 进行数据恢复使用。
+
+我们知道，在InnoDB引擎中的内存结构中，主要的内存区域就是缓冲池，在缓冲池中缓存了很多的数
+据页。 当我们在一个事务中，执行多个增删改的操作时，InnoDB引擎会先操作缓冲池中的数据，如果
+缓冲区没有对应的数据，会通过后台线程将磁盘中的数据加载出来，存放在缓冲区中，然后将缓冲池中
+的数据修改，修改后的数据页我们称为脏页。 而脏页则会在一定的时机，通过后台线程刷新到磁盘
+中，从而保证缓冲区与磁盘的数据一致。 而缓冲区的脏页数据并不是实时刷新的，而是一段时间之后
+将缓冲区的数据刷新到磁盘中，假如刷新到磁盘的过程出错了，而提示给用户事务提交成功，而数据却
+没有持久化下来，这就出现问题了，没有保证事务的持久性。
+![演示图](./picture/%E4%BA%8B%E5%8A%A1%E5%8E%9F%E7%90%862.png "事务原理2")
+
+那么，如何解决上述的问题呢？ 在InnoDB中提供了一份日志 redo log，接下来我们再来分析一
+下，通过redolog如何解决这个问题。
+
+![演示图](./picture/%E4%BA%8B%E5%8A%A1%E5%8E%9F%E7%90%863.png "事务原理3")
+
+有了redolog之后，当对缓冲区的数据进行增删改之后，会首先将操作的数据页的变化，记录在redo
+log buffer中。在事务提交时，会将redo log buffer中的数据刷新到redo log磁盘文件中。
+过一段时间之后，如果刷新缓冲区的脏页到磁盘时，发生错误，此时就可以借助于redo log进行数据
+恢复，这样就保证了事务的持久性。 而如果脏页成功刷新到磁盘 或 或者涉及到的数据已经落盘，此
+时redolog就没有作用了，就可以删除了，所以存在的两个redolog文件是循环写的。
+
+因为在业务操作中，我们操作数据一般都是随机读写磁盘的，而不是顺序读写磁盘。 而redo log在
+往磁盘文件中写入数据，由于是日志文件，所以都是顺序写的。顺序写的效率，要远大于随机写。 这
+种先写日志的方式，称之为 WAL（Write-Ahead Logging）。
+
+#### undo log
+回滚日志，用于记录数据被修改前的信息 , 作用包含两个 : 提供回滚(保证事务的原子性) 和
+MVCC(多版本并发控制) 。
+
+undo log和redo log记录物理日志不一样，它是逻辑日志。可以认为当delete一条记录时，undo
+log中会记录一条对应的insert记录，反之亦然，当update一条记录时，它记录一条对应相反的
+update记录。当执行rollback时，就可以从undo log中的逻辑记录读取到相应的内容并进行回滚。
+
+Undo log销毁：undo log在事务执行时产生，事务提交时，并不会立即删除undo log，因为这些
+日志可能还用于MVCC。
+
+Undo log存储：undo log采用段的方式进行管理和记录，存放在前面介绍的 rollback segment
+回滚段中，内部包含1024个undo log segment
+
+### MVCC
+
+ #### 基本概念
+ 1. 当前读
+读取的是记录的最新版本，读取时还要保证其他并发事务不能修改当前记录，会对读取的记录进行加
+锁。对于我们日常的操作，如：select ... lock in share mode(共享锁)，select ...
+for update、update、insert、delete(排他锁)都是一种当前读。
+
+2. 快照读
+简单的select（不加锁）就是快照读，快照读，读取的是记录数据的可见版本，有可能是历史数据，
+不加锁，是非阻塞读。
+- Read Committed：每次select，都生成一个快照读。
+- Repeatable Read：开启事务后第一个select语句才是快照读的地方。
+- Serializable：快照读会退化为当前读。
+
+3. MVCC
+全称 Multi-Version Concurrency Control，多版本并发控制。指维护一个数据的多个版本，
+使得读写操作没有冲突，快照读为MySQL实现MVCC提供了一个非阻塞读功能。MVCC的具体实现，还需
+要依赖于数据库记录中的三个隐式字段、undo log日志、readView。
+接下来，我们再来介绍一下InnoDB引擎的表中涉及到的隐藏字段 、undolog 以及 readview，从
+而来介绍一下MVCC的原理。
+
